@@ -6,6 +6,13 @@ from django.contrib.auth.models import Group
 from django.contrib.auth.decorators import login_required,user_passes_test
 from django.contrib import messages
 from django.conf import settings
+from django.views.decorators.csrf import csrf_exempt
+import requests
+import datetime
+import base64
+from django.shortcuts import render, redirect
+from django.http import JsonResponse
+import json
 
 def home_view(request):
     products=models.Product.objects.all()
@@ -559,3 +566,64 @@ def contactus_view(request):
             send_mail(str(name)+' || '+str(email),message, settings.EMAIL_HOST_USER, settings.EMAIL_RECEIVING_USER, fail_silently = False)
             return render(request, 'ecom/contactussuccess.html')
     return render(request, 'ecom/contactus.html', {'form':sub})
+def get_access_token():
+    consumer_key = 'n5AjAa0aDxCwSTHATKgdhLQmwZH595G86afXdIfPUgqAim8T'
+    consumer_secret = '0mqqkXWk9ff3E5EGa5gzcBg1bTQGPFfGZwATv5JGzG3XUIYPli61RKGfGt8IGqsZ'
+    api_URL = 'https://sandbox.safaricom.co.ke/oauth/v1/generate?grant_type=client_credentials'
+
+    r = requests.get(api_URL, auth=(consumer_key, consumer_secret))
+    json_response = r.json()
+    access_token = json_response["access_token"]
+    return access_token
+
+@csrf_exempt
+def stk_push(request):
+    if request.method == 'POST':
+        phone_number = request.POST.get('phone')
+        amount = request.POST.get('amount')
+
+        access_token = get_access_token()
+        api_url = "https://sandbox.safaricom.co.ke/mpesa/stkpush/v1/processrequest"
+        headers = {"Authorization": "Bearer %s" % access_token}
+
+        BusinessShortCode = "174379"  # Sandbox shortcode
+        LipaNaMpesaPasskey = "bfb279f9aa9bdbcf158e97dd71a467cd2e0c893059b10f78e6b72ada1ed2c919"
+        Timestamp = datetime.datetime.now().strftime('%Y%m%d%H%M%S')
+        data_to_encode = BusinessShortCode + LipaNaMpesaPasskey + Timestamp
+        encoded_string = base64.b64encode(data_to_encode.encode())
+        Password = encoded_string.decode('utf-8')
+
+        payload = {
+            "BusinessShortCode": BusinessShortCode,
+            "Password": Password,
+            "Timestamp": Timestamp,
+            "TransactionType": "CustomerPayBillOnline",
+            "Amount": amount,
+            "PartyA": phone_number,
+            "PartyB": BusinessShortCode,
+            "PhoneNumber": phone_number,
+            "CallBackURL": "https://3a80-102-216-155-242.ngrok-free.app/callback_url/",
+            "AccountReference": "Ecommerce",
+            "TransactionDesc": "Payment of {}".format(amount)
+        }
+
+        response = requests.post(api_url, json=payload, headers=headers)
+        res_data = response.json()
+
+        if response.status_code == 200:
+            return redirect('/payment-success')
+        else:
+            return render(request, 'ecom/payment_failed.html', {'error': res_data})
+
+    return redirect('/')
+
+@csrf_exempt
+def mpesa_callback(request):
+    if request.method == 'POST':
+        data = json.loads(request.body)
+        print("MPESA CALLBACK RECEIVED:")
+        print(data)
+        # You can store this data in your database
+        return JsonResponse({"ResultCode": 0, "ResultDesc": "Received Successfully"})
+    else:
+        return JsonResponse({"error": "Invalid request"}, status=400)
